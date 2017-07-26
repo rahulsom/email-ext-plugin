@@ -1,32 +1,33 @@
 package hudson.plugins.emailext.plugins.content;
 
 import hudson.Functions;
-import hudson.maven.reporters.SurefireAggregatedReport;
 import hudson.model.Action;
-import hudson.model.AbstractBuild;
+import hudson.model.Run;
 import hudson.tasks.junit.TestResult;
 import hudson.tasks.junit.TestResultAction;
 import hudson.tasks.test.AggregatedTestResultAction;
+import jenkins.model.Jenkins;
+import org.jenkinsci.plugins.scriptsecurity.sandbox.whitelists.Whitelisted;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import jenkins.model.Jenkins;
 
 public class ScriptContentBuildWrapper {
 
-    private AbstractBuild<?, ?> build;
+    private Run<?, ?> build;
 
-    public ScriptContentBuildWrapper(AbstractBuild<?, ?> build) {
+    public ScriptContentBuildWrapper(Run<?, ?> build) {
         this.build = build;
     }
 
+    @Whitelisted
     public String getTimestampString() {
         return Functions.rfc822Date(build.getTimestamp());
     }
 
     public Action getAction(String className) {
-        for (Action a : build.getActions()) {
+        for (Action a : build.getAllActions()) {
             if (a.getClass().getName().equals(className)) {
                 return a;
             }
@@ -42,11 +43,11 @@ public class ScriptContentBuildWrapper {
      * @return The static analysis actions for the current build. The returned
      *         list might be empty if there are no such actions.
      */
+    @Whitelisted
     public List<Action> getStaticAnalysisActions() {
         if (isPluginInstalled("analysis-core")) {
             return new StaticAnalysisUtilities().getActions(build);
-        }
-        else {
+        } else {
             return Collections.emptyList();
         }
     }
@@ -60,29 +61,25 @@ public class ScriptContentBuildWrapper {
      *         <code>false</code> if not.
      */
     public static boolean isPluginInstalled(final String shortName) {
-        Jenkins instance = Jenkins.getInstance();
-        if (instance != null) {
-            return instance.getPlugin(shortName) != null;
-        }
-        return true;
+        return Jenkins.getActiveInstance().getPlugin(shortName) != null;
     }
 
+    @Whitelisted
     public Action getCoberturaAction() {
         return getAction("hudson.plugins.cobertura.CoberturaBuildAction");
     }
 
+    @Whitelisted
     public List<TestResult> getJUnitTestResult() {
-        List<TestResult> result = new ArrayList<TestResult>();
-        List<Action> actions = build.getActions();
+        List<TestResult> result = new ArrayList<>();
+        List<AggregatedTestResultAction> actions = build.getActions(AggregatedTestResultAction.class);
         for (Action action : actions) {
-            if (action instanceof hudson.maven.reporters.SurefireAggregatedReport) {
-                /* Maven Project */
-                List<AggregatedTestResultAction.ChildReport> reportList =
-                        ((SurefireAggregatedReport) action).getChildReports();
-                for (AggregatedTestResultAction.ChildReport report : reportList) {
-                    if (report.result instanceof hudson.tasks.junit.TestResult) {
-                        result.add((TestResult) report.result);
-                    }
+            /* Maven Project */
+            List<AggregatedTestResultAction.ChildReport> reportList =
+                    ((AggregatedTestResultAction) action).getChildReports();
+            for (AggregatedTestResultAction.ChildReport report : reportList) {
+                if (report.result instanceof hudson.tasks.junit.TestResult) {
+                    result.add((TestResult) report.result);
                 }
             }
         }

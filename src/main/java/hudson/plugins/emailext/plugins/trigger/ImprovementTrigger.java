@@ -1,67 +1,73 @@
 package hudson.plugins.emailext.plugins.trigger;
 
+import hudson.Extension;
 import hudson.model.AbstractBuild;
+import hudson.model.Run;
+import hudson.model.TaskListener;
+import hudson.plugins.emailext.ExtendedEmailPublisher;
 import hudson.plugins.emailext.plugins.EmailTrigger;
 import hudson.plugins.emailext.plugins.EmailTriggerDescriptor;
-import net.sf.json.JSONObject;
-import org.kohsuke.stapler.StaplerRequest;
+import hudson.plugins.emailext.plugins.RecipientProvider;
+import hudson.plugins.emailext.plugins.recipients.DevelopersRecipientProvider;
+import hudson.plugins.emailext.plugins.recipients.ListRecipientProvider;
+import hudson.tasks.test.AbstractTestResultAction;
+import org.kohsuke.stapler.DataBoundConstructor;
+
+import java.util.List;
 
 public class ImprovementTrigger extends EmailTrigger {
-    
-    public static final String TRIGGER_NAME = "Improvement";
-    
-     @Override
-    public boolean trigger(AbstractBuild<?, ?> build) {
 
-        if (build.getPreviousBuild() == null)
+    public static final String TRIGGER_NAME = "Test Improvement";
+    
+    @DataBoundConstructor
+    public ImprovementTrigger(List<RecipientProvider> recipientProviders, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(recipientProviders, recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
+    
+    @Deprecated
+    public ImprovementTrigger(boolean sendToList, boolean sendToDevs, boolean sendToRequester, boolean sendToCulprits, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(sendToList, sendToDevs, sendToRequester, sendToCulprits,recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
+
+    @Override
+    public boolean trigger(AbstractBuild<?, ?> build, TaskListener listener) {
+        Run<?,?> previousRun = ExtendedEmailPublisher.getPreviousRun(build, listener);
+
+        if (previousRun == null)
             return false;
-        if (build.getTestResultAction() == null) return false;
-        if (build.getPreviousBuild().getTestResultAction() == null)
+        if (build.getAction(AbstractTestResultAction.class) == null) return false;
+        if (previousRun.getAction(AbstractTestResultAction.class) == null)
             return false;
         
         int numCurrFailures = getNumFailures(build);
-        
+
         // The first part of the condition avoids accidental triggering for
         // builds that aggregate downstream test results before those test
         // results are available...
-        return build.getTestResultAction().getTotalCount() > 0 &&
-            numCurrFailures < getNumFailures(build.getPreviousBuild()) &&
-            numCurrFailures > 0;            
+        return build.getAction(AbstractTestResultAction.class).getTotalCount() > 0
+                && numCurrFailures < getNumFailures(previousRun)
+                && numCurrFailures > 0;
     }
 
-    @Override
-    public EmailTriggerDescriptor getDescriptor() {
-        return DESCRIPTOR;
-    }
-    
-    public static DescriptorImpl DESCRIPTOR = new DescriptorImpl();
-    
+    @Extension
     public static final class DescriptorImpl extends EmailTriggerDescriptor {
-
-        @Override
-        public String getTriggerName() {
-            return TRIGGER_NAME;
-        }
-
-        @Override
-        public EmailTrigger newInstance(StaplerRequest req, JSONObject formData) {
-            return new ImprovementTrigger();
-        }
-
-        @Override
-        public String getHelpText() {
-            return Messages.ImprovementTrigger_HelpText();
+        
+        public DescriptorImpl() {
+            addTriggerNameToReplace(UnstableTrigger.TRIGGER_NAME);
+            addTriggerNameToReplace(StillUnstableTrigger.TRIGGER_NAME);
+            
+            addDefaultRecipientProvider(new DevelopersRecipientProvider());
+            addDefaultRecipientProvider(new ListRecipientProvider());
         }
         
-    }
-
-    @Override
-    public boolean getDefaultSendToDevs() {
-        return true;
-    }
-
-    @Override
-    public boolean getDefaultSendToList() {
-        return true;
-    }
+        @Override
+        public String getDisplayName() {
+            return TRIGGER_NAME;
+        }
+        
+        @Override
+        public EmailTrigger createDefault() {
+            return _createDefault();
+        }
+    }    
 }

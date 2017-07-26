@@ -1,40 +1,42 @@
 package hudson.plugins.emailext.plugins.trigger;
 
+import hudson.Extension;
 import hudson.plugins.emailext.plugins.EmailTrigger;
-import hudson.plugins.emailext.plugins.EmailTriggerDescriptor;
-import net.sf.json.JSONObject;
-import org.kohsuke.stapler.StaplerRequest;
+import hudson.plugins.emailext.plugins.RecipientProvider;
+import org.kohsuke.stapler.DataBoundConstructor;
+
+import java.util.List;
 
 public class SecondFailureTrigger extends NthFailureTrigger {
 
-	public static final String TRIGGER_NAME = "2nd Failure";
+    public static final String TRIGGER_NAME = "Failure - 2nd";
 
-	public SecondFailureTrigger() {
-		super(2);
-	}
+    @DataBoundConstructor
+    public SecondFailureTrigger(List<RecipientProvider> recipientProviders, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(recipientProviders, recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
+    
+    @Deprecated
+    public SecondFailureTrigger(boolean sendToList, boolean sendToDevs, boolean sendToRequester, boolean sendToCulprits, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(2, sendToList, sendToDevs, sendToRequester, sendToCulprits,recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
 
-	@Override
-	public EmailTriggerDescriptor getDescriptor() {
-		return DESCRIPTOR;
-	}
+    @Override
+    protected int getRequiredFailureCount() {
+        return 2;
+    }
 
-	public static DescriptorImpl DESCRIPTOR = new DescriptorImpl();
+    @Extension
+    public static final class DescriptorImpl extends NthFailureTrigger.DescriptorImpl {
 
-	public static final class DescriptorImpl extends NthFailureTrigger.DescriptorImpl {
-
-		@Override
-		public String getTriggerName() {
-			return TRIGGER_NAME;
-		}
-
-		@Override
-		public EmailTrigger newInstance(StaplerRequest req, JSONObject formData) {
-			return new SecondFailureTrigger();
-		}
-
-		@Override
-		public String getHelpText() {
-			return "An email will be sent when the build fails twice in a row after a successful build.";
-		}
-	}
+        @Override
+        public String getDisplayName() {
+            return TRIGGER_NAME;
+        }
+        
+        @Override
+        public EmailTrigger createDefault() {
+            return _createDefault();
+        }
+    }
 }

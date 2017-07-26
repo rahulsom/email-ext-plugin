@@ -1,52 +1,41 @@
 package hudson.plugins.emailext.plugins.trigger;
 
+import hudson.Extension;
 import hudson.plugins.emailext.plugins.EmailTrigger;
-import hudson.plugins.emailext.plugins.EmailTriggerDescriptor;
-import net.sf.json.JSONObject;
-import org.kohsuke.stapler.StaplerRequest;
+import hudson.plugins.emailext.plugins.RecipientProvider;
+import org.kohsuke.stapler.DataBoundConstructor;
+
+import java.util.List;
 
 public class FirstFailureTrigger extends NthFailureTrigger {
 
-	public static final String TRIGGER_NAME = "1st Failure";
+    public static final String TRIGGER_NAME = "Failure - 1st";
 
-	public FirstFailureTrigger() {
-		super(1);
-	}
-	
-	@Override
-	public EmailTriggerDescriptor getDescriptor() {
-		return DESCRIPTOR;
-	}
-	
-	public static DescriptorImpl DESCRIPTOR = new DescriptorImpl();
+    @DataBoundConstructor
+    public FirstFailureTrigger(List<RecipientProvider> recipientProviders, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(recipientProviders, recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
+    
+    @Deprecated
+    public FirstFailureTrigger(boolean sendToList, boolean sendToDevs, boolean sendToRequester, boolean sendToCulprits, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(1, sendToList, sendToDevs, sendToRequester, sendToCulprits,recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
 
-	public static final class DescriptorImpl extends NthFailureTrigger.DescriptorImpl {
+    @Override
+    protected int getRequiredFailureCount() {
+        return 1;
+    }
 
-		@Override
-		public String getTriggerName() {
-			return TRIGGER_NAME;
-		}
+    @Extension
+    public static final class DescriptorImpl extends NthFailureTrigger.DescriptorImpl {
 
-		@Override
-		public EmailTrigger newInstance(StaplerRequest req, JSONObject formData) {
-			return new FirstFailureTrigger();
-		}
-
-		@Override
-		public String getHelpText() {
-			return "An email will be sent when the build status changes from \"Success\" " +
-				   "to \"Failure\"";
-		}		
-	}
-        
-        /**
-         * Maintaining backward compatibility
-         * @return this after checking for failureCount setting
-         */
-        public Object readResolve() {
-            if(this.failureCount == 0) {
-                this.failureCount = 1;
-            }
-            return this;
+        @Override
+        public String getDisplayName() {
+            return TRIGGER_NAME;
         }
+        
+        public EmailTrigger createDefault() {
+            return _createDefault();
+        }
+    }
 }

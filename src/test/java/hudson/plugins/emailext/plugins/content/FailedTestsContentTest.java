@@ -1,27 +1,31 @@
 package hudson.plugins.emailext.plugins.content;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import hudson.model.AbstractBuild;
 import hudson.model.TaskListener;
-import hudson.tasks.junit.CaseResult;
 import hudson.tasks.test.AbstractTestResultAction;
+import hudson.tasks.test.TestResult;
 import hudson.util.StreamTaskListener;
-
 import org.apache.commons.lang.StringUtils;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 
-import static org.junit.Assert.*;
-import static org.mockito.Mockito.*;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 
 @SuppressWarnings({"unchecked"})
 @RunWith(PowerMockRunner.class)
-@PrepareForTest( { CaseResult.class })
+@PrepareForTest( { TestResult.class })
 public class FailedTestsContentTest
 {
     private FailedTestsContent failedTestContent;
@@ -29,13 +33,12 @@ public class FailedTestsContentTest
     private AbstractBuild build;
     
     private TaskListener listener;
-
+    
     @Before
     public void setUp()
     {
         failedTestContent = new FailedTestsContent();
-        listener = new StreamTaskListener(System.out);
-
+        listener = StreamTaskListener.fromStdout();
         build = mock( AbstractBuild.class );
     }
 
@@ -47,13 +50,24 @@ public class FailedTestsContentTest
         assertEquals( "No tests ran.", content );
     }
 
+    /**
+     * Verifies that token expansion works for pipeline builds (JENKINS-38519).
+     */
+    @Test
+    public void testGetContent_withWorkspaceAndNoTestsRanShouldGiveAMeaningfulMessage()
+            throws Exception {
+        String content = failedTestContent.evaluate( build, build.getWorkspace(), listener, FailedTestsContent.MACRO_NAME );
+
+        assertEquals( "No tests ran.", content );
+    }
+
     @Test
     public void testGetContent_whenAllTestsPassedShouldGiveMeaningfulMessage()
             throws Exception {
         AbstractTestResultAction testResults = mock( AbstractTestResultAction.class );
         when( testResults.getFailCount() ).thenReturn( 0 );
 
-        when( build.getTestResultAction() ).thenReturn( testResults );
+        when( build.getAction(AbstractTestResultAction.class) ).thenReturn( testResults );
 
         String content = failedTestContent.evaluate( build, listener, FailedTestsContent.MACRO_NAME );
 
@@ -66,7 +80,7 @@ public class FailedTestsContentTest
         AbstractTestResultAction<?> testResults = mock( AbstractTestResultAction.class );
         when( testResults.getFailCount() ).thenReturn( 123 );
 
-        when( build.getTestResultAction() ).thenReturn( testResults );
+        when( build.getAction(AbstractTestResultAction.class) ).thenReturn( testResults );
 
         failedTestContent.maxTests = 0;
         String content = failedTestContent.evaluate( build, listener, FailedTestsContent.MACRO_NAME );
@@ -75,23 +89,149 @@ public class FailedTestsContentTest
     }
 
     @Test
+    public void testGetContent_withMessage_withStack()
+            throws Exception {
+        AbstractTestResultAction<?> testResults = mock( AbstractTestResultAction.class );
+        when( testResults.getFailCount() ).thenReturn( 2 );
+
+        List<TestResult> failedTests = new ArrayList<TestResult>();
+        for(int i = 0; i < 2; i++) {
+            TestResult result = mock( TestResult.class );
+            when( result.isPassed() ).thenReturn( false );
+            when( result.getFullName() ).thenReturn( "hudson.plugins.emailext.ExtendedEmailPublisherTest" );
+            when( result.getDisplayName() ).thenReturn( "Test" + i );
+            when( result.getErrorDetails() ).thenReturn( "Error" + i );
+            when( result.getErrorStackTrace() ).thenReturn( "Stack" + i );
+            failedTests.add(result);
+        }
+        
+        Mockito.<List<? extends TestResult>>when( testResults.getFailedTests() ).thenReturn( failedTests );        
+        when( build.getAction(AbstractTestResultAction.class) ).thenReturn( testResults );
+
+        failedTestContent.maxTests = 2;
+        failedTestContent.showMessage = true;
+        failedTestContent.showStack = true;
+        String content = failedTestContent.evaluate( build, listener, FailedTestsContent.MACRO_NAME );
+
+        for(int i = 0; i < 2; i++) {
+            assertTrue( content.contains("FAILED:  hudson.plugins.emailext.ExtendedEmailPublisherTest.Test" + i) );
+            assertTrue( content.contains("Error Message:\nError" + i) );
+            assertTrue( content.contains("Stack Trace:\nStack" + i) );
+        }
+    }
+
+    @Test
+    public void testGetContent_noMessage_withStack()
+            throws Exception {
+        AbstractTestResultAction<?> testResults = mock( AbstractTestResultAction.class );
+        when( testResults.getFailCount() ).thenReturn( 2 );
+
+        List<TestResult> failedTests = new ArrayList<TestResult>();
+        for(int i = 0; i < 2; i++) {
+            TestResult result = mock( TestResult.class );
+            when( result.isPassed() ).thenReturn( false );
+            when( result.getFullName() ).thenReturn( "hudson.plugins.emailext.ExtendedEmailPublisherTest" );
+            when( result.getDisplayName() ).thenReturn( "Test" + i );
+            when( result.getErrorDetails() ).thenReturn( "Error" + i );
+            when( result.getErrorStackTrace() ).thenReturn( "Stack" + i );
+            failedTests.add(result);
+        }
+        Mockito.<List<? extends TestResult>>when( testResults.getFailedTests() ).thenReturn( failedTests );
+        when( build.getAction(AbstractTestResultAction.class) ).thenReturn( testResults );
+
+        failedTestContent.maxTests = 2;
+        failedTestContent.showMessage = false;
+        failedTestContent.showStack = true;
+        String content = failedTestContent.evaluate( build, listener, FailedTestsContent.MACRO_NAME );
+
+        for(int i = 0; i < 2; i++) {
+            assertTrue( content.contains("FAILED:  hudson.plugins.emailext.ExtendedEmailPublisherTest.Test" + i) );
+            assertFalse( content.contains("Error Message:\nError" + i) );
+            assertTrue( content.contains("Stack Trace:\nStack" + i) );
+        }
+    }
+
+    @Test
+    public void testGetContent_withMessage_noStack()
+            throws Exception {
+        AbstractTestResultAction<?> testResults = mock( AbstractTestResultAction.class );
+        when( testResults.getFailCount() ).thenReturn( 2 );
+
+        List<TestResult> failedTests = new ArrayList<TestResult>();
+        for(int i = 0; i < 2; i++) {
+            TestResult result = mock( TestResult.class );
+            when( result.isPassed() ).thenReturn( false );
+            when( result.getFullName() ).thenReturn( "hudson.plugins.emailext.ExtendedEmailPublisherTest" );
+            when( result.getDisplayName() ).thenReturn( "Test" + i );
+            when( result.getErrorDetails() ).thenReturn( "Error" + i );
+            when( result.getErrorStackTrace() ).thenReturn( "Stack" + i );
+            failedTests.add(result);
+        }
+        Mockito.<List<? extends TestResult>>when( testResults.getFailedTests() ).thenReturn( failedTests );
+        when( build.getAction(AbstractTestResultAction.class) ).thenReturn( testResults );
+
+        failedTestContent.maxTests = 2;
+        failedTestContent.showMessage = true;
+        failedTestContent.showStack = false;
+        String content = failedTestContent.evaluate( build, listener, FailedTestsContent.MACRO_NAME );
+
+        for(int i = 0; i < 2; i++) {
+            assertTrue( content.contains("FAILED:  hudson.plugins.emailext.ExtendedEmailPublisherTest.Test" + i) );
+            assertTrue( content.contains("Error Message:\nError" + i) );
+            assertFalse( content.contains("Stack Trace:\nStack" + i) );
+        }
+    }
+
+    @Test
+    public void testGetContent_noMessage_noStack()
+            throws Exception {
+        AbstractTestResultAction<?> testResults = mock( AbstractTestResultAction.class );
+        when( testResults.getFailCount() ).thenReturn( 2 );
+
+        List<TestResult> failedTests = new ArrayList<TestResult>();
+        for(int i = 0; i < 2; i++) {
+            TestResult result = mock( TestResult.class );
+            when( result.isPassed() ).thenReturn( false );
+            when( result.getFullName() ).thenReturn( "hudson.plugins.emailext.ExtendedEmailPublisherTest" );
+            when( result.getDisplayName() ).thenReturn( "Test" + i );
+            when( result.getErrorDetails() ).thenReturn( "Error" + i );
+            when( result.getErrorStackTrace() ).thenReturn( "Stack" + i );
+            failedTests.add(result);
+        }
+        Mockito.<List<? extends TestResult>>when( testResults.getFailedTests() ).thenReturn( failedTests );
+        when( build.getAction(AbstractTestResultAction.class) ).thenReturn( testResults );
+
+        failedTestContent.maxTests = 2;
+        failedTestContent.showMessage = false;
+        failedTestContent.showStack = false;
+        String content = failedTestContent.evaluate( build, listener, FailedTestsContent.MACRO_NAME );
+
+        for(int i = 0; i < 2; i++) {
+            assertTrue( content.contains("FAILED:  hudson.plugins.emailext.ExtendedEmailPublisherTest.Test" + i) );
+            assertFalse( content.contains("Error Message:\nError" + i) );
+            assertFalse( content.contains("Stack Trace:\nStack" + i) );
+        }
+    }
+
+    @Test
     public void testGetContent_whenContentLargerThanMaxLengthShouldTruncate()
             throws Exception {
         AbstractTestResultAction<?> testResults = mock( AbstractTestResultAction.class );
         when( testResults.getFailCount() ).thenReturn( 5 );
 
-        List<CaseResult> failedTests = new ArrayList<CaseResult>();
+        List<TestResult> failedTests = new ArrayList<TestResult>();
         for(int i = 0; i < 5; i++) {
-            CaseResult result = mock( CaseResult.class );
-            when( result.getStatus() ).thenReturn( CaseResult.Status.FAILED );
-            when( result.getClassName() ).thenReturn( "hudson.plugins.emailext.ExtendedEmailPublisherTest" );
+            TestResult result = mock( TestResult.class );
+            when( result.isPassed() ).thenReturn( false );
+            when( result.getFullName() ).thenReturn( "hudson.plugins.emailext.ExtendedEmailPublisherTest" );
             when( result.getDisplayName() ).thenReturn( "Test" + i );
             when( result.getErrorDetails() ).thenReturn( StringUtils.leftPad( "", 3 * 1024, 'z' ) );
             when( result.getErrorStackTrace() ).thenReturn( StringUtils.leftPad( "", 200, 'e' ) );
             failedTests.add(result);
         }
-        when( testResults.getFailedTests() ).thenReturn( failedTests );
-        when( build.getTestResultAction() ).thenReturn( testResults );
+
+        Mockito.<List<? extends TestResult>>when( testResults.getFailedTests() ).thenReturn( failedTests );
+        when( build.getAction(AbstractTestResultAction.class) ).thenReturn( testResults );
 
         failedTestContent.maxLength = 10;
         String content = failedTestContent.evaluate( build, listener, FailedTestsContent.MACRO_NAME );

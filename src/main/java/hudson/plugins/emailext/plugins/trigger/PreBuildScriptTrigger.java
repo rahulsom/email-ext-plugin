@@ -1,72 +1,54 @@
-/*
- * To change this template, choose Tools | Templates
- * and open the template in the editor.
- */
 package hudson.plugins.emailext.plugins.trigger;
 
-import groovy.lang.Binding;
-import groovy.lang.GroovyShell;
-import hudson.model.AbstractBuild;
-import hudson.plugins.emailext.ExtendedEmailPublisher;
-import hudson.plugins.emailext.ScriptSandbox;
+import hudson.Extension;
 import hudson.plugins.emailext.plugins.EmailTrigger;
 import hudson.plugins.emailext.plugins.EmailTriggerDescriptor;
-import hudson.plugins.emailext.plugins.content.ScriptContentBuildWrapper;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.util.logging.Level;
-import jenkins.model.Jenkins;
-import net.sf.json.JSONObject;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang.StringUtils;
-import org.codehaus.groovy.control.CompilerConfiguration;
-import org.codehaus.groovy.control.customizers.ImportCustomizer;
-import org.kohsuke.groovy.sandbox.SandboxTransformer;
-import org.kohsuke.stapler.StaplerRequest;
+import hudson.plugins.emailext.plugins.RecipientProvider;
+import org.jenkinsci.plugins.scriptsecurity.sandbox.groovy.SecureGroovyScript;
+import org.kohsuke.stapler.DataBoundConstructor;
 
-/**
- *
- * @author acearl
- */
+import java.util.List;
+
 public class PreBuildScriptTrigger extends AbstractScriptTrigger {
 
-    public static final String TRIGGER_NAME = "Pre-Build Script Trigger";
+    public static final String TRIGGER_NAME = "Script - Before Build";
+
+    @DataBoundConstructor
+    public PreBuildScriptTrigger(List<RecipientProvider> recipientProviders, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType, SecureGroovyScript secureTriggerScript) {
+        super(recipientProviders, recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType, secureTriggerScript);
+    }
+    
+    @Deprecated
+    public PreBuildScriptTrigger(List<RecipientProvider> recipientProviders, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType, String triggerScript) {
+        super(recipientProviders, recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType, triggerScript);
+    }
+    
+    @Deprecated
+    public PreBuildScriptTrigger(boolean sendToList, boolean sendToDevs, boolean sendToRequester, boolean sendToCulprits, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType, String triggerScript) {
+        super(sendToList, sendToDevs, sendToRequester, sendToCulprits,recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType, triggerScript);
+    }
     
     @Override
     public boolean isPreBuild() {
         return true;
     }
 
-    @Override
-    public EmailTriggerDescriptor getDescriptor() {
-        return DESCRIPTOR;
-    }
-
-    public static DescriptorImpl DESCRIPTOR = new DescriptorImpl();
-
-    public static final class DescriptorImpl extends AbstractScriptTrigger.DescriptorImpl {
+    @Extension
+    public static final class DescriptorImpl extends EmailTriggerDescriptor {
 
         @Override
-        public String getTriggerName() {
+        public String getDisplayName() {
             return TRIGGER_NAME;
         }
 
         @Override
-        public EmailTrigger newInstance(StaplerRequest req, JSONObject formData) {
-            PreBuildScriptTrigger trigger = new PreBuildScriptTrigger();
-            if(formData != null) {
-              trigger.triggerScript = formData.getString("email_ext_prebuildscripttrigger_script");
-            }
-            return trigger;
+        public boolean isWatchable() {
+            return false;
         }
-
+        
         @Override
-        public String getHelpText() {
-            return Messages.PreBuildScriptTrigger_HelpText();
+        public EmailTrigger createDefault() {
+            return new PreBuildScriptTrigger(defaultRecipientProviders, "", "$PROJECT_DEFAULT_REPLYTO", "$PROJECT_DEFAULT_SUBJECT", "$PROJECT_DEFAULT_CONTENT", "", 0, "project", new SecureGroovyScript("", false, null));
         }
     }
 }

@@ -1,116 +1,90 @@
 package hudson.plugins.emailext.plugins.content;
 
-import hudson.model.AbstractBuild;
-import hudson.model.Hudson;
+import hudson.FilePath;
+import hudson.model.Item;
+import hudson.model.Run;
 import hudson.model.TaskListener;
-import hudson.plugins.emailext.EmailToken;
-import hudson.plugins.emailext.ExtendedEmailPublisher;
-import hudson.tasks.Mailer;
+import hudson.plugins.emailext.ExtendedEmailPublisherDescriptor;
+import hudson.plugins.emailext.JellyTemplateConfig.JellyTemplateConfigProvider;
+import hudson.plugins.emailext.plugins.EmailToken;
+import jenkins.model.Jenkins;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.jelly.JellyContext;
 import org.apache.commons.jelly.JellyException;
 import org.apache.commons.jelly.JellyTagException;
 import org.apache.commons.jelly.Script;
 import org.apache.commons.jelly.XMLOutput;
+import org.jenkinsci.lib.configprovider.ConfigProvider;
+import org.jenkinsci.plugins.scriptsecurity.scripts.ApprovalContext;
+import org.jenkinsci.plugins.scriptsecurity.scripts.ScriptApproval;
+import org.jenkinsci.plugins.scriptsecurity.scripts.languages.GroovyLanguage;
+import org.jenkinsci.plugins.scriptsecurity.scripts.languages.JellyLanguage;
+import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
 import org.xml.sax.InputSource;
 
+import javax.annotation.Nonnull;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import org.jenkinsci.plugins.tokenmacro.DataBoundTokenMacro;
-import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
+import java.io.StringReader;
+import java.nio.file.attribute.UserDefinedFileAttributeView;
 
 @EmailToken
-public class JellyScriptContent extends DataBoundTokenMacro {
+public class JellyScriptContent extends AbstractEvalContent {
 
     public static final String MACRO_NAME = "JELLY_SCRIPT";
     private static final String DEFAULT_HTML_TEMPLATE_NAME = "html";
-    private static final String DEFAULT_TEXT_TEMPLATE_NAME = "text";
     private static final String DEFAULT_TEMPLATE_NAME = DEFAULT_HTML_TEMPLATE_NAME;
-    private static final String EMAIL_TEMPLATES_DIRECTORY = "email-templates";
-    
+    public static final String JELLY_EXTENSION = ".jelly";
+
     @Parameter
     public String template = DEFAULT_TEMPLATE_NAME;
 
-    @Override
-    public boolean acceptsMacroName(String macroName) {
-        return macroName.equals(MACRO_NAME);
+    public JellyScriptContent() {
+        super(MACRO_NAME);
     }
-    /*
-     public String getHelpText() {
-     return "Custom message content generated from a Jelly script template. "
-     + "There are two templates provided: \"" + DEFAULT_HTML_TEMPLATE_NAME + "\" "
-     + "and \"" + DEFAULT_TEXT_TEMPLATE_NAME + "\". Custom Jelly templates should be placed in "
-     + "$JENKINS_HOME/" + EMAIL_TEMPLATES_DIRECTORY + ". When using custom templates, "
-     + "the template filename without \".jelly\" should be used for "
-     + "the \"" + TEMPLATE_NAME_ARG + "\" argument.\n"
-     + "<ul>\n"
-     + "<li><i>" + TEMPLATE_NAME_ARG + "</i> - the template name.<br>\n"
-     + "Defaults to \"" + DEFAULT_TEMPLATE_NAME + "\".\n"
-     + "</ul>\n";
-     }
-     */
 
     @Override
-    public String evaluate(AbstractBuild<?, ?> build, TaskListener listener, String macroName)
-            throws MacroEvaluationException, IOException, InterruptedException {
+    public String evaluate(@Nonnull Run<?, ?> run, FilePath workspace, @Nonnull TaskListener listener, String macroName) throws MacroEvaluationException, IOException, InterruptedException {
         InputStream inputStream = null;
 
         try {
-            inputStream = getTemplateInputStream(template);
-            return renderContent(build, inputStream);
+            inputStream = getFileInputStream(workspace, template, JELLY_EXTENSION);
+            return renderContent(run, inputStream, listener);
         } catch (JellyException e) {
-            //LOGGER.log(Level.SEVERE, null, e);
             return "JellyException: " + e.getMessage();
         } catch (FileNotFoundException e) {
-            String missingTemplateError = generateMissingTemplate(template);
-            //LOGGER.log(Level.SEVERE, missingTemplateError);
-            return missingTemplateError;
+            return generateMissingFile("Jelly", template);
         } finally {
             IOUtils.closeQuietly(inputStream);
         }
     }
 
-    private String generateMissingTemplate(String template) {
-        return "Jelly script [" + template + "] was not found in $JENKINS_HOME/" + EMAIL_TEMPLATES_DIRECTORY + ".";
+    @Override
+    protected Class<? extends ConfigProvider> getProviderClass() {
+        return JellyTemplateConfigProvider.class;
     }
 
-    /**
-     * Try to get the template from the classpath first before trying the file
-     * system.
-     *
-     * @param templateName
-     * @return
-     * @throws java.io.FileNotFoundException
-     */
-    private InputStream getTemplateInputStream(String templateName)
-            throws FileNotFoundException {
-        InputStream inputStream = getClass().getClassLoader().getResourceAsStream(
-                "hudson/plugins/emailext/templates/" + templateName + ".jelly");
-
-        if (inputStream == null) {
-            final File templatesFolder = new File(Hudson.getInstance().getRootDir(), EMAIL_TEMPLATES_DIRECTORY);
-            final File templateFile = new File(templatesFolder, templateName + ".jelly");
-            inputStream = new FileInputStream(templateFile);
+    private String renderContent(@Nonnull Run<?, ?> build, InputStream inputStream, @Nonnull TaskListener listener)
+            throws JellyException, IOException {
+        String rawScript = IOUtils.toString(inputStream);
+        if (inputStream instanceof UserProvidedContentInputStream) {
+            Item parent = build.getParent();
+            ScriptApproval.get().configuring(rawScript, JellyLanguage.get(), ApprovalContext.create().withItem(parent));
+            ScriptApproval.get().using(rawScript, JellyLanguage.get());
         }
 
-        return inputStream;
-    }
+        JellyContext context = createContext(new ScriptContentBuildWrapper(build), build, listener);
+        Script script = context.compileScript(new InputSource(new StringReader(rawScript)));
 
-    private String renderContent(AbstractBuild<?, ?> build, InputStream inputStream)
-            throws JellyException, IOException {
-        JellyContext context = createContext(new ScriptContentBuildWrapper(build), build);
-        Script script = context.compileScript(new InputSource(inputStream));
         if (script != null) {
-            return convert(context, script);
+            return convert(build, context, script);
         }
         return null;
     }
 
-    private String convert(JellyContext context, Script script)
+    private String convert(Run<?, ?> build, JellyContext context, Script script)
             throws JellyTagException, IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream(16 * 1024);
         XMLOutput xmlOutput = XMLOutput.createXMLOutput(output);
@@ -118,28 +92,17 @@ public class JellyScriptContent extends DataBoundTokenMacro {
         xmlOutput.flush();
         xmlOutput.close();
         output.close();
-        return output.toString(getCharset());
+        return output.toString(getCharset(build));
     }
 
-    private JellyContext createContext(Object it, AbstractBuild<?, ?> build) {
+    private JellyContext createContext(Object it, @Nonnull Run<?, ?> build, @Nonnull TaskListener listener) {
         JellyContext context = new JellyContext();
+        ExtendedEmailPublisherDescriptor descriptor = Jenkins.getActiveInstance().getDescriptorByType(ExtendedEmailPublisherDescriptor.class);
         context.setVariable("it", it);
         context.setVariable("build", build);
         context.setVariable("project", build.getParent());
-        context.setVariable("rooturl", ExtendedEmailPublisher.DESCRIPTOR.getHudsonUrl());
+        context.setVariable("logger", listener.getLogger());
+        context.setVariable("rooturl", descriptor.getHudsonUrl());
         return context;
-    }
-
-    public boolean hasNestedContent() {
-        return false;
-    }
-
-    private String getCharset() {
-        String charset = Mailer.descriptor().getCharset();
-        String overrideCharset = ExtendedEmailPublisher.DESCRIPTOR.getCharset();
-        if (overrideCharset != null) {
-            charset = overrideCharset;
-        }
-        return charset;
     }
 }

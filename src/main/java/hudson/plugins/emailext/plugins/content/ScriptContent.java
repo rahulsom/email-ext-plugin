@@ -1,47 +1,54 @@
 package hudson.plugins.emailext.plugins.content;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import groovy.lang.Binding;
 import groovy.lang.GroovyRuntimeException;
 import groovy.lang.GroovyShell;
+import groovy.lang.Script;
 import groovy.text.SimpleTemplateEngine;
-import hudson.model.AbstractBuild;
-import hudson.model.Hudson;
+import groovy.text.Template;
+import hudson.FilePath;
+import hudson.model.Item;
+import hudson.model.Run;
 import hudson.model.TaskListener;
-import hudson.plugins.emailext.EmailToken;
-import hudson.plugins.emailext.ExtendedEmailPublisher;
-import hudson.plugins.emailext.ScriptSandbox;
-import hudson.plugins.emailext.plugins.ContentBuilder;
-
+import hudson.plugins.emailext.ExtendedEmailPublisherDescriptor;
+import hudson.plugins.emailext.GroovyTemplateConfig.GroovyTemplateConfigProvider;
+import hudson.plugins.emailext.groovy.sandbox.EmailExtScriptTokenMacroWhitelist;
+import hudson.plugins.emailext.groovy.sandbox.PrintStreamInstanceWhitelist;
+import hudson.plugins.emailext.groovy.sandbox.StaticProxyInstanceWhitelist;
+import hudson.plugins.emailext.groovy.sandbox.TaskListenerInstanceWhitelist;
+import hudson.plugins.emailext.plugins.EmailToken;
 import jenkins.model.Jenkins;
-
 import org.apache.commons.io.IOUtils;
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import org.apache.commons.lang.StringUtils;
 import org.codehaus.groovy.control.CompilerConfiguration;
 import org.codehaus.groovy.control.customizers.ImportCustomizer;
-import org.codehaus.groovy.runtime.InvokerHelper;
-import org.jenkinsci.plugins.tokenmacro.DataBoundTokenMacro;
-import org.jenkinsci.plugins.tokenmacro.DataBoundTokenMacro.Parameter;
+import org.jenkinsci.lib.configprovider.ConfigProvider;
+import org.jenkinsci.plugins.scriptsecurity.sandbox.Whitelist;
+import org.jenkinsci.plugins.scriptsecurity.sandbox.groovy.GroovySandbox;
+import org.jenkinsci.plugins.scriptsecurity.sandbox.whitelists.ProxyWhitelist;
+import org.jenkinsci.plugins.scriptsecurity.sandbox.whitelists.StaticWhitelist;
+import org.jenkinsci.plugins.scriptsecurity.scripts.ApprovalContext;
+import org.jenkinsci.plugins.scriptsecurity.scripts.ScriptApproval;
+import org.jenkinsci.plugins.scriptsecurity.scripts.languages.GroovyLanguage;
 import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
-import org.jenkinsci.plugins.tokenmacro.TokenMacro;
-import org.kohsuke.groovy.sandbox.SandboxTransformer;
+
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.lang.ref.Reference;
+import java.lang.ref.SoftReference;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 @EmailToken
-public class ScriptContent extends DataBoundTokenMacro {
+public class ScriptContent extends AbstractEvalContent {
 
     private static final Logger LOGGER = Logger.getLogger(ScriptContent.class.getName());
     
@@ -53,32 +60,34 @@ public class ScriptContent extends DataBoundTokenMacro {
     @Parameter
     public String template = DEFAULT_TEMPLATE_NAME;
     
-    private static final String EMAIL_TEMPLATES_DIRECTORY = "email-templates";
-
     public static final String MACRO_NAME = "SCRIPT";
     
-    @Override
-    public boolean acceptsMacroName(String macroName) {
-        return macroName.equals(MACRO_NAME);
-    } 
+    private static final Map<String,Reference<Template>> templateCache = new HashMap<>();
+    
+    public ScriptContent() {
+        super(MACRO_NAME);
+    }
 
     @Override
-    public String evaluate(AbstractBuild<?, ?> context, TaskListener listener, String macroName)
-            throws MacroEvaluationException, IOException, InterruptedException {
-
+    public String evaluate(Run<?, ?> run, FilePath workspace, TaskListener listener, String macroName) throws MacroEvaluationException, IOException, InterruptedException {
         InputStream inputStream = null;
         String result = "";
         
         try {
             if (!StringUtils.isEmpty(script)) {
-                inputStream = getFileInputStream(script);
-                result = executeScript(context, listener, inputStream);
+                inputStream = getFileInputStream(workspace, script, ".groovy");
+                result = executeScript(run, listener, inputStream);
             } else {
-                inputStream = getFileInputStream(template);
-                result = renderTemplate(context, listener, inputStream);
+                inputStream = getFileInputStream(workspace, template, ".template");
+                result = renderTemplate(run, listener, inputStream);
             }
         } catch (FileNotFoundException e) {
-            String missingScriptError = generateMissingFile(script, template);
+            String missingScriptError = "";
+            if (!StringUtils.isEmpty(script)) {
+                missingScriptError = generateMissingFile("Groovy Script", script);
+            } else {
+                missingScriptError = generateMissingFile("Groovy Template", template);
+            }
             LOGGER.log(Level.SEVERE, missingScriptError);
             result = missingScriptError;
         } catch (GroovyRuntimeException e) {
@@ -89,101 +98,11 @@ public class ScriptContent extends DataBoundTokenMacro {
         return result;
     }
 
-    /**
-     * Generates a missing file error message
-     *
-     * @param script name of the script requested
-     * @param template name of the template requested
-     * @return a message about the missing file
-     */
-    private String generateMissingFile(String script, String template) {
-        if (!StringUtils.isEmpty(script)) {
-            return "Script [" + script + "] was not found in $JENKINS_HOME/" + EMAIL_TEMPLATES_DIRECTORY + ".";
-        }
-        return "Template [" + template + "] was not found in $JENKINS_HOME/" + EMAIL_TEMPLATES_DIRECTORY + ".";
+    @Override
+    protected Class<? extends ConfigProvider> getProviderClass () {
+        return GroovyTemplateConfigProvider.class;
     }
-
-    /**
-     * Try to get the script from the classpath first before trying the file
-     * system.
-     *
-     * @param scriptName
-     * @return
-     * @throws java.io.FileNotFoundException
-     */
-    private InputStream getFileInputStream(String fileName)
-            throws FileNotFoundException {
-        InputStream inputStream = getClass().getClassLoader().getResourceAsStream("hudson/plugins/emailext/templates/" + fileName);
-        if (inputStream == null) {
-            final File scriptsFolder = new File(Hudson.getInstance().getRootDir(), EMAIL_TEMPLATES_DIRECTORY);
-            final File scriptFile = new File(scriptsFolder, fileName);
-            inputStream = new FileInputStream(scriptFile);
-        }
-        return inputStream;
-    }   
     
-    
-    private class MethodMissingHandler {
-        private AbstractBuild<?, ?> build;
-        private TaskListener listener;
-        
-        public MethodMissingHandler(AbstractBuild<?,?> build, TaskListener listener) {
-            this.build = build;
-            this.listener = listener;
-        }
-        
-        private void populateArgs(Object args, Map<String, String> map, ListMultimap<String, String> multiMap) {
-            if(args instanceof Object[]) {
-                Object[] argArray = (Object[])args;
-                if(argArray.length > 0) {
-                    Map<String, Object> argMap = (Map<String, Object>)argArray[0];
-                    for(Map.Entry<String, Object> entry : argMap.entrySet()) {
-                        String value = entry.getValue().toString();
-                        if(entry.getValue() instanceof List) {
-                            List valueList = (List)entry.getValue();
-                            for(Object v : valueList) {
-                                multiMap.put(entry.getKey(), v.toString());
-                            }
-                            value = valueList.get(valueList.size() - 1).toString();
-                        } else {
-                            multiMap.put(entry.getKey(), value);
-                        }                                               
-                        map.put(entry.getKey(), value);
-                    }                    
-                }                
-            }
-        }
-        
-        public Object methodMissing(String name, Object args) 
-                throws MacroEvaluationException, IOException, InterruptedException {
-            TokenMacro macro = null;
-            for(TokenMacro m : TokenMacro.all()) {
-                if(m.acceptsMacroName(name)) {
-                    macro = m;
-                    break;
-                }
-            }
-
-            if(macro == null) {
-                for(TokenMacro m : ContentBuilder.getPrivateMacros()) {
-                    if(m.acceptsMacroName(name)) {
-                        macro = m;
-                        break;
-                    }
-                }
-            }
-
-            if(macro != null) {                
-                Map<String, String> argsMap = new HashMap<String, String>();
-                ListMultimap<String, String> argsMultimap = ArrayListMultimap.create();
-                populateArgs(args, argsMap, argsMultimap);
-
-                return macro.evaluate(build, listener, name, argsMap, argsMultimap);
-            }
-            return String.format("[Could not find content token (check your usage): %s]", name);
-        }
-    }
-   
     /**
      * Renders the template using a SimpleTemplateEngine
      *
@@ -192,47 +111,123 @@ public class ScriptContent extends DataBoundTokenMacro {
      * @return the rendered template content
      * @throws IOException
      */
-    private String renderTemplate(AbstractBuild<?, ?> build, TaskListener listener, InputStream templateStream)
+    private String renderTemplate(Run<?, ?> build, TaskListener listener, InputStream templateStream)
             throws IOException {
         
-        Map<String, Object> binding = new HashMap<String, Object>();
+        String result;
+        
+        final Map<String, Object> binding = new HashMap<>();
+        ExtendedEmailPublisherDescriptor descriptor = Jenkins.getActiveInstance().getDescriptorByType(ExtendedEmailPublisherDescriptor.class);
         binding.put("build", build);
         binding.put("listener", listener);
         binding.put("it", new ScriptContentBuildWrapper(build));
-        binding.put("rooturl", ExtendedEmailPublisher.DESCRIPTOR.getHudsonUrl());
+        binding.put("rooturl", descriptor.getHudsonUrl());
         binding.put("project", build.getParent());
-        
-        MethodMissingHandler handler = new MethodMissingHandler(build, listener);
-        
-        // we add the binding to the SimpleTemplateEngine instead of the shell
-        GroovyShell shell = createEngine(Collections.singletonMap("methodMissing", (Object)InvokerHelper.getMethodPointer(handler, "methodMissing")));
-        shell.evaluate("Script.metaClass.methodMissing = methodMissing");
-        SimpleTemplateEngine engine = new SimpleTemplateEngine(shell);
-        return engine.createTemplate(new InputStreamReader(templateStream)).make(binding).toString();        
+
+        try {
+            String text = IOUtils.toString(templateStream);
+            boolean approvedScript = false;
+            if (templateStream instanceof UserProvidedContentInputStream && !AbstractEvalContent.isApprovedScript(text, GroovyLanguage.get())) {
+                approvedScript = false;
+                ScriptApproval.get().configuring(text, GroovyLanguage.get(), ApprovalContext.create().withItem(build.getParent()));
+            } else {
+                approvedScript = true;
+            }
+            // we add the binding to the SimpleTemplateEngine instead of the shell
+            GroovyShell shell = createEngine(descriptor, Collections.<String, Object>emptyMap(), !approvedScript);
+            SimpleTemplateEngine engine = new SimpleTemplateEngine(shell);
+            Template tmpl;
+            synchronized (templateCache) {
+                Reference<Template> templateR = templateCache.get(text);
+                tmpl = templateR == null ? null : templateR.get();
+                if (tmpl == null) {
+                    tmpl = engine.createTemplate(text);
+                    templateCache.put(text, new SoftReference<>(tmpl));
+                }
+            }
+            final Template tmplR = tmpl;
+            if (approvedScript) {
+                //The script has been approved by an admin, so run it as is
+                result = tmplR.make(binding).toString();
+            } else {
+                //unapproved script, so run in sandbox
+                StaticProxyInstanceWhitelist whitelist = new StaticProxyInstanceWhitelist(build, "templates-instances.whitelist");
+                result = GroovySandbox.runInSandbox(new Callable<String>() {
+                    @Override
+                    public String call() throws Exception {
+                        return tmplR.make(binding).toString(); //TODO there is a PrintWriter instance created in make and bound to out
+                    }
+                }, new ProxyWhitelist(
+                        Whitelist.all(),
+                        new TaskListenerInstanceWhitelist(listener),
+                        new PrintStreamInstanceWhitelist(listener.getLogger()),
+                        new EmailExtScriptTokenMacroWhitelist(),
+                        whitelist));
+            }
+
+        } catch(Exception e) {
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            e.printStackTrace(pw);
+            result = "Exception raised during template rendering: " + e.getMessage() + "\n\n" + sw.toString();
+        }
+        return result;
     }
-    
-        /**
+
+    /**
      * Executes a script and returns the last value as a String
      *
-     * @param build the build to act on
+     * @param build        the build to act on
      * @param scriptStream the script input stream
      * @return a String containing the toString of the last item in the script
      * @throws IOException
      */
-    private String executeScript(AbstractBuild<?, ?> build, TaskListener listener, InputStream scriptStream)
+    private String executeScript(Run<?, ?> build, TaskListener listener, InputStream scriptStream)
             throws IOException {
         String result = "";
-        Map binding = new HashMap<String, Object>();
+        Map binding = new HashMap<>();
+        ExtendedEmailPublisherDescriptor descriptor = Jenkins.getActiveInstance().getDescriptorByType(ExtendedEmailPublisherDescriptor.class);
+        Item parent = build.getParent();
+
         binding.put("build", build);
         binding.put("it", new ScriptContentBuildWrapper(build));
-        binding.put("project", build.getParent());
-        binding.put("rooturl", ExtendedEmailPublisher.DESCRIPTOR.getHudsonUrl());
+        binding.put("project", parent);
+        binding.put("rooturl", descriptor.getHudsonUrl());
+        PrintStream logger = listener.getLogger();
+        binding.put("logger", logger);
 
-        GroovyShell shell = createEngine(binding);
-        Object res = shell.evaluate(new InputStreamReader(scriptStream));
-        if (res != null) {
-            result = res.toString();
+        String scriptContent = IOUtils.toString(scriptStream, descriptor.getCharset());
+
+        if (scriptStream instanceof UserProvidedContentInputStream) {
+            ScriptApproval.get().configuring(scriptContent, GroovyLanguage.get(), ApprovalContext.create().withItem(parent));
         }
+
+        if (scriptStream instanceof UserProvidedContentInputStream && !AbstractEvalContent.isApprovedScript(scriptContent, GroovyLanguage.get())) {
+            //Unapproved script, run it in the sandbox
+            GroovyShell shell = createEngine(descriptor, binding, true);
+            Script script = shell.parse(scriptContent);
+            Object res = GroovySandbox.run(script, new ProxyWhitelist(
+                    Whitelist.all(),
+                    new PrintStreamInstanceWhitelist(logger),
+                    new EmailExtScriptTokenMacroWhitelist()
+
+            ));
+            if (res != null) {
+                result = res.toString();
+            }
+        } else {
+            if (scriptStream instanceof UserProvidedContentInputStream) {
+                ScriptApproval.get().using(scriptContent, GroovyLanguage.get());
+            }
+            //Pre approved script, so run as is
+            GroovyShell shell = createEngine(descriptor, binding, false);
+            Script script = shell.parse(scriptContent);
+            Object res = script.run();
+            if (res != null) {
+                result = res.toString();
+            }
+        }
+
         return result;
     }
 
@@ -244,33 +239,31 @@ public class ScriptContent extends DataBoundTokenMacro {
      * @throws FileNotFoundException
      * @throws IOException
      */
-    private GroovyShell createEngine(Map<String, Object> variables)
-            throws FileNotFoundException, IOException {
+    private GroovyShell createEngine(ExtendedEmailPublisherDescriptor descriptor, Map<String, Object> variables, boolean secure)
+            throws IOException {
 
-        ClassLoader cl = Jenkins.getInstance().getPluginManager().uberClassLoader;
-        ScriptSandbox sandbox = null;
-        CompilerConfiguration cc = new CompilerConfiguration();
+        ClassLoader cl;
+        CompilerConfiguration cc;
+        if (secure) {
+            cl = GroovySandbox.createSecureClassLoader(Jenkins.getActiveInstance().getPluginManager().uberClassLoader);
+            cc = GroovySandbox.createSecureCompilerConfiguration();
+        } else {
+            cl = Jenkins.getActiveInstance().getPluginManager().uberClassLoader;
+            cc = new CompilerConfiguration();
+        }
+        cc.setScriptBaseClass(EmailExtScript.class.getCanonicalName()); 
         cc.addCompilationCustomizers(new ImportCustomizer().addStarImports(
                 "jenkins",
                 "jenkins.model",
                 "hudson",
                 "hudson.model"));
 
-        if (ExtendedEmailPublisher.DESCRIPTOR.isSecurityEnabled()) {
-            cc.addCompilationCustomizers(new SandboxTransformer());
-            sandbox = new ScriptSandbox();
-        }
-
         Binding binding = new Binding();
         for (Map.Entry<String, Object> e : variables.entrySet()) {
             binding.setVariable(e.getKey(), e.getValue());
         }
 
-        GroovyShell shell = new GroovyShell(cl, binding, cc);
-        if (sandbox != null) {
-            sandbox.register();
-        }
-        return shell;
+        return new GroovyShell(cl, binding, cc);
     }
 
     @Override

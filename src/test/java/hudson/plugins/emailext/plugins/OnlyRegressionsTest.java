@@ -9,23 +9,31 @@ import hudson.model.TaskListener;
 import hudson.plugins.emailext.plugins.content.FailedTestsContent;
 import hudson.tasks.junit.JUnitResultArchiver;
 import hudson.util.StreamTaskListener;
-import org.jvnet.hudson.test.HudsonTestCase;
+import org.junit.Rule;
+import org.junit.Test;
+import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.TestBuilder;
 
 import java.io.IOException;
 import java.net.URL;
-import java.util.Collections;
 
-public class OnlyRegressionsTest extends HudsonTestCase {
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
+public class OnlyRegressionsTest {
+
+    @Rule
+    public JenkinsRule j = new JenkinsRule();
+
+    @Test
     public void testOnlyRegressionsAreShown() throws Exception {
-        FreeStyleProject project = createFreeStyleProject("onlyRegressions");
+        FreeStyleProject project = j.createFreeStyleProject("onlyRegressions");
         project.getPublishersList().add(new JUnitResultArchiver("target/testreports/*.xml", true, null));
 
         project.getBuildersList().add(new TestBuilder() {
             @Override
             public boolean perform(AbstractBuild<?, ?> abstractBuild, Launcher launcher, BuildListener buildListener) throws InterruptedException, IOException {
-                final URL failedTestReport = OnlyRegressionsTest.class.getClassLoader().getResource("hudson/plugins/emailext/testreports/failed_test.xml");
+                final URL failedTestReport = Thread.currentThread().getContextClassLoader().getResource("hudson/plugins/emailext/testreports/failed_test.xml");
                 FilePath workspace = abstractBuild.getWorkspace();
 
                 FilePath testDir = workspace.child("target").child("testreports");
@@ -36,7 +44,7 @@ public class OnlyRegressionsTest extends HudsonTestCase {
                 return true;
             }
         });
-        TaskListener listener = new StreamTaskListener(System.out);
+        TaskListener listener = StreamTaskListener.fromStdout();
         project.scheduleBuild2(0).get();
         FailedTestsContent failedTestsContent = new FailedTestsContent();
         failedTestsContent.onlyRegressions = true;

@@ -2,6 +2,11 @@ target
 .classpath
 .settings
 .project
+.idea
+.gradle
+gradlew
+gradlew.bat
+settings.gradle
 *.iml
 *.ipr
 *.iws
@@ -9,3 +14,6 @@ work
 /email-ext.sublime-workspace
 /email-ext.sublime-project
 *.bak
+nbactions.xml
+.directory
+nb-configuration.xml

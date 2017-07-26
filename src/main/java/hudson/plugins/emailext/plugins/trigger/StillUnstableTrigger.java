@@ -1,23 +1,42 @@
 package hudson.plugins.emailext.plugins.trigger;
 
+import hudson.Extension;
 import hudson.model.AbstractBuild;
 import hudson.model.Result;
+import hudson.model.Run;
+import hudson.model.TaskListener;
+import hudson.plugins.emailext.ExtendedEmailPublisher;
 import hudson.plugins.emailext.plugins.EmailTrigger;
 import hudson.plugins.emailext.plugins.EmailTriggerDescriptor;
-import net.sf.json.JSONObject;
-import org.kohsuke.stapler.StaplerRequest;
+import hudson.plugins.emailext.plugins.RecipientProvider;
+import hudson.plugins.emailext.plugins.recipients.DevelopersRecipientProvider;
+import org.kohsuke.stapler.DataBoundConstructor;
+
+import java.util.List;
+
 
 public class StillUnstableTrigger extends EmailTrigger {
 
-    public static final String TRIGGER_NAME = "Still Unstable";
+    public static final String TRIGGER_NAME = "Unstable (Test Failures) - Still";
+    
+    @DataBoundConstructor
+    public StillUnstableTrigger(List<RecipientProvider> recipientProviders, String recipientList, String replyTo, 
+            String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(recipientProviders, recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
+    
+    @Deprecated
+    public StillUnstableTrigger(boolean sendToList, boolean sendToDevs, boolean sendToRequester, boolean sendToCulprits, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(sendToList, sendToDevs, sendToRequester, sendToCulprits,recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
 
     @Override
-    public boolean trigger(AbstractBuild<?, ?> build) {
+    public boolean trigger(AbstractBuild<?, ?> build, TaskListener listener) {
         Result buildResult = build.getResult();
 
         if (buildResult == Result.UNSTABLE) {
-            AbstractBuild<?, ?> prevBuild = build.getPreviousBuild();
-            if (prevBuild != null && (prevBuild.getResult() == Result.UNSTABLE)) {
+            Run<?,?> prevRun = ExtendedEmailPublisher.getPreviousRun(build, listener);
+            if (prevRun != null && prevRun.getResult() == Result.UNSTABLE) {
                 return true;
             }
         }
@@ -25,42 +44,23 @@ public class StillUnstableTrigger extends EmailTrigger {
         return false;
     }
 
-    @Override
-    public EmailTriggerDescriptor getDescriptor() {
-        return DESCRIPTOR;
-    }
-
-    public static DescriptorImpl DESCRIPTOR = new DescriptorImpl();
-
+    @Extension
     public static final class DescriptorImpl extends EmailTriggerDescriptor {
 
         public DescriptorImpl() {
             addTriggerNameToReplace(UnstableTrigger.TRIGGER_NAME);
+            
+            addDefaultRecipientProvider(new DevelopersRecipientProvider());
         }
 
         @Override
-        public String getTriggerName() {
+        public String getDisplayName() {
             return TRIGGER_NAME;
-        }
-
+        }      
+        
         @Override
-        public EmailTrigger newInstance(StaplerRequest req, JSONObject formData) {
-            return new StillUnstableTrigger();
+        public EmailTrigger createDefault() {
+            return _createDefault();
         }
-
-        @Override
-        public String getHelpText() {
-            return Messages.StillUnstableTrigger_HelpText();
-        }
-    }
-
-    @Override
-    public boolean getDefaultSendToDevs() {
-        return true;
-    }
-
-    @Override
-    public boolean getDefaultSendToList() {
-        return true;
-    }
+    }    
 }

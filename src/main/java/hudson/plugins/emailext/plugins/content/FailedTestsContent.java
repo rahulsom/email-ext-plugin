@@ -1,24 +1,31 @@
 package hudson.plugins.emailext.plugins.content;
 
+import hudson.Extension;
+import hudson.FilePath;
 import hudson.model.AbstractBuild;
+import hudson.model.Run;
 import hudson.model.TaskListener;
-import hudson.plugins.emailext.EmailToken;
 import hudson.tasks.junit.CaseResult;
 import hudson.tasks.test.AbstractTestResultAction;
-import java.io.IOException;
+import hudson.tasks.test.TestResult;
 import org.jenkinsci.plugins.tokenmacro.DataBoundTokenMacro;
 import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
+
+import java.io.IOException;
 
 /**
  * An EmailContent for failing tests. Only shows tests that have failed.
  * 
  * @author markltbaker
  */
-@EmailToken
+@Extension
 public class FailedTestsContent extends DataBoundTokenMacro {
 
     @Parameter
     public boolean showStack = true;
+
+    @Parameter
+    public boolean showMessage = true;
 
     @Parameter
     public int maxTests = Integer.MAX_VALUE;
@@ -39,9 +46,15 @@ public class FailedTestsContent extends DataBoundTokenMacro {
     @Override
     public String evaluate(AbstractBuild<?, ?> build, TaskListener listener, String macroName)
             throws MacroEvaluationException, IOException, InterruptedException {
+        return evaluate(build, build.getWorkspace(), listener, macroName);
+    }
+
+    @Override
+    public String evaluate(Run<?, ?> run, FilePath workspace, TaskListener listener, String macroName)
+            throws MacroEvaluationException, IOException, InterruptedException {
 
         StringBuilder buffer = new StringBuilder();
-        AbstractTestResultAction<?> testResult = build.getTestResultAction();
+        AbstractTestResultAction<?> testResult = run.getAction(AbstractTestResultAction.class);
 
         if (null == testResult) {
             return "No tests ran.";
@@ -52,9 +65,7 @@ public class FailedTestsContent extends DataBoundTokenMacro {
         if (failCount == 0) {
             buffer.append("All tests passed");
         } else {
-            buffer.append(failCount);
-            buffer.append(" tests failed.");
-            buffer.append('\n');
+            buffer.append(failCount).append(" tests failed.\n");
 
             boolean showOldFailures = !onlyRegressions;
             if(maxLength < Integer.MAX_VALUE) {
@@ -64,18 +75,16 @@ public class FailedTestsContent extends DataBoundTokenMacro {
             if (maxTests > 0) {
                 int printedTests = 0;
                 int printedLength = 0;
-                for (CaseResult failedTest : testResult.getFailedTests()) {
-                    if (showOldFailures || failedTest.getAge() == 1) {
+                for (TestResult failedTest : testResult.getFailedTests()) {
+                    if (showOldFailures || getTestAge(failedTest) == 1) {
                         if (printedTests < maxTests && printedLength <= maxLength) {
-                            printedLength += outputTest(buffer, failedTest, showStack, maxLength-printedLength);
+                            printedLength += outputTest(buffer, failedTest, showStack, showMessage, maxLength-printedLength);
                             printedTests++;
                         }
                     }
                 }
                 if (failCount > printedTests) {
-                    buffer.append("... and ");
-                    buffer.append(failCount - printedTests);
-                    buffer.append(" other failed tests.\n\n");
+                    buffer.append("... and ").append(failCount - printedTests).append(" other failed tests.\n\n");
                 }
                 if (printedLength >= maxLength) {
                     buffer.append("\n\n... output truncated.\n\n");
@@ -86,30 +95,40 @@ public class FailedTestsContent extends DataBoundTokenMacro {
         return buffer.toString();
     }
 
-    private int outputTest(StringBuilder buffer, CaseResult failedTest,
-            boolean showStack, int lengthLeft) {
+    private int getTestAge(TestResult result) {
+        if(result.isPassed())
+            return 0;
+        else if (result.getRun() != null) {
+            return result.getRun().getNumber()-result.getFailedSince()+1;
+        } else {
+            return 0;
+        }
+    }
+
+    private int outputTest(StringBuilder buffer, TestResult failedTest,
+            boolean showStack, boolean showMessage, int lengthLeft) {
         StringBuilder local = new StringBuilder();
-        int currLength = buffer.length();
-
-        local.append(failedTest.getStatus().toString());
-        local.append(":  ");
         
-        local.append(failedTest.getClassName());
-        local.append(".");
+        local.append(failedTest.isPassed() ? "PASSED" : "FAILED").append(":  ");
+        
+        if(failedTest instanceof CaseResult) {
+            local.append(((CaseResult)failedTest).getClassName());
+        } else {
+            local.append(failedTest.getFullName());
+        }
+        local.append('.').append(failedTest.getDisplayName()).append('\n');
 
-        local.append(failedTest.getDisplayName());
-        local.append("\n\n");
-
-        local.append("Error Message:\n");
-        local.append(failedTest.getErrorDetails());
-
+        if (showMessage) {
+            local.append("\nError Message:\n").append(failedTest.getErrorDetails()).append('\n');
+        }
+        
         if (showStack) {
-            local.append("\n\n");
-            local.append("Stack Trace:\n");
-            local.append(failedTest.getErrorStackTrace());
+            local.append("\nStack Trace:\n").append(failedTest.getErrorStackTrace()).append('\n');
         }
 
-        local.append("\n\n");
+        if (showMessage || showStack) {
+            local.append('\n');
+        }
 
         if(local.length() > lengthLeft) {
             local.setLength(lengthLeft);

@@ -1,24 +1,43 @@
 package hudson.plugins.emailext.plugins.trigger;
 
+import hudson.Extension;
 import hudson.model.AbstractBuild;
 import hudson.model.Result;
+import hudson.model.Run;
+import hudson.model.TaskListener;
+import hudson.plugins.emailext.ExtendedEmailPublisher;
 import hudson.plugins.emailext.plugins.EmailTrigger;
 import hudson.plugins.emailext.plugins.EmailTriggerDescriptor;
-import net.sf.json.JSONObject;
-import org.kohsuke.stapler.StaplerRequest;
+import hudson.plugins.emailext.plugins.RecipientProvider;
+import hudson.plugins.emailext.plugins.recipients.DevelopersRecipientProvider;
+import hudson.plugins.emailext.plugins.recipients.ListRecipientProvider;
+import org.kohsuke.stapler.DataBoundConstructor;
+
+import java.util.List;
+
 
 public class FixedTrigger extends EmailTrigger {
 
     public static final String TRIGGER_NAME = "Fixed";
+    
+    @DataBoundConstructor
+    public FixedTrigger(List<RecipientProvider> recipientProviders, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(recipientProviders, recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
+    
+    @Deprecated
+    public FixedTrigger(boolean sendToList, boolean sendToDevs, boolean sendToRequester, boolean sendToCulprits, String recipientList, String replyTo, String subject, String body, String attachmentsPattern, int attachBuildLog, String contentType) {
+        super(sendToList, sendToDevs, sendToRequester, sendToCulprits,recipientList, replyTo, subject, body, attachmentsPattern, attachBuildLog, contentType);
+    }
 
     @Override
-    public boolean trigger(AbstractBuild<?, ?> build) {
+    public boolean trigger(AbstractBuild<?, ?> build, TaskListener listener) {
 
         Result buildResult = build.getResult();
 
         if (buildResult == Result.SUCCESS) {
-            AbstractBuild<?, ?> prevBuild = build.getPreviousBuild();
-            if (prevBuild != null && (prevBuild.getResult() == Result.UNSTABLE || prevBuild.getResult() == Result.FAILURE)) {
+            Run<?, ?> prevRun = ExtendedEmailPublisher.getPreviousRun(build, listener);
+            if (prevRun != null && (prevRun.getResult() == Result.UNSTABLE || prevRun.getResult() == Result.FAILURE)) {
                 return true;
             }
         }
@@ -26,42 +45,24 @@ public class FixedTrigger extends EmailTrigger {
         return false;
     }
 
-    @Override
-    public EmailTriggerDescriptor getDescriptor() {
-        return DESCRIPTOR;
-    }
-
-    public static DescriptorImpl DESCRIPTOR = new DescriptorImpl();
-
+    @Extension
     public static final class DescriptorImpl extends EmailTriggerDescriptor {
 
         public DescriptorImpl() {
             addTriggerNameToReplace(SuccessTrigger.TRIGGER_NAME);
+            
+            addDefaultRecipientProvider(new DevelopersRecipientProvider());
+            addDefaultRecipientProvider(new ListRecipientProvider());
         }
 
         @Override
-        public String getTriggerName() {
+        public String getDisplayName() {
             return TRIGGER_NAME;
         }
-
+        
         @Override
-        public EmailTrigger newInstance(StaplerRequest req, JSONObject formData) {
-            return new FixedTrigger();
+        public EmailTrigger createDefault() {
+            return _createDefault();
         }
-
-        @Override
-        public String getHelpText() {
-            return Messages.FixedTrigger_HelpText();
-        }
-    }
-
-    @Override
-    public boolean getDefaultSendToDevs() {
-        return true;
-    }
-
-    @Override
-    public boolean getDefaultSendToList() {
-        return true;
-    }
+    }    
 }
