@@ -4,10 +4,12 @@ import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 import groovy.lang.Script;
 import hudson.EnvVars;
+import hudson.FilePath;
 import hudson.model.AbstractBuild;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.plugins.emailext.plugins.ContentBuilder;
+import org.jenkinsci.plugins.scriptsecurity.sandbox.whitelists.Whitelisted;
 import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
 import org.jenkinsci.plugins.tokenmacro.TokenMacro;
 
@@ -17,6 +19,9 @@ import java.util.List;
 import java.util.Map;
 
 public abstract class EmailExtScript extends Script {
+
+    @Whitelisted
+    public EmailExtScript() {}
 
     private void populateArgs(Object args, Map<String, String> map, ListMultimap<String, String> multiMap) {
         if(args instanceof Object[]) {
@@ -65,11 +70,12 @@ public abstract class EmailExtScript extends Script {
             ListMultimap<String, String> argsMultimap = ArrayListMultimap.create();
             populateArgs(args, argsMap, argsMultimap);
 
-            // Get the build and listener from the binding.
-            AbstractBuild<?, ?> build = (AbstractBuild<?, ?>)this.getBinding().getVariable("build");
+            // Get the build, workspace and listener from the binding.
+            Run<?, ?> build = (Run<?, ?>)this.getBinding().getVariable("build");
+            FilePath workspace = (FilePath)this.getBinding().getVariable("workspace");
             TaskListener listener = (TaskListener)this.getBinding().getVariable("listener");
 
-            return macro.evaluate(build, listener, name, argsMap, argsMultimap);
+            return macro.evaluate(build, workspace, listener, name, argsMap, argsMultimap);
         } else {
             // try environment variables
 

@@ -28,11 +28,13 @@ import com.google.common.collect.Iterables;
 import hudson.EnvVars;
 import hudson.model.AbstractBuild;
 import hudson.model.Cause;
+import hudson.model.Descriptor;
 import hudson.model.Item;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.model.User;
 import hudson.plugins.emailext.EmailRecipientUtils;
+import hudson.plugins.emailext.ExtendedEmailPublisher;
 import hudson.plugins.emailext.ExtendedEmailPublisherContext;
 import hudson.scm.ChangeLogSet;
 import hudson.tasks.MailSender;
@@ -47,6 +49,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -67,14 +70,12 @@ public final class RecipientProviderUtilities {
         final Set<User> users = new HashSet<>();
         for (final Run<?, ?> run : runs) {
             debug.send("    build: %d", run.getNumber());
+            // TODO: core 2.60+, workflow-job 2.12+: Switch to checking if run is an instance of RunWithSCM and call getChangeSets directly.
             if (run instanceof AbstractBuild<?,?>) {
                 final ChangeLogSet<?> changeLogSet = ((AbstractBuild<?,?>)run).getChangeSet();
-                if (changeLogSet == null) {
-                    debug.send("      changeLogSet was null");
-                } else {
-                    addChangeSetUsers(changeLogSet, users, debug);
-                }
+                addChangeSetUsers(changeLogSet, users, debug);
             } else {
+                // TODO: core 2.60+, workflow-job 2.12+: Decide whether to remove this logic since it won't be needed for Pipelines any more.
                 try {
                     Method getChangeSets = run.getClass().getMethod("getChangeSets");
                     if (List.class.isAssignableFrom(getChangeSets.getReturnType())) {
@@ -126,7 +127,7 @@ public final class RecipientProviderUtilities {
             Cause.UserIdCause cause = run.getCause(Cause.UserIdCause.class);
             if (cause != null) {
                 String id = cause.getUserId();
-                return User.get(id, false, null);
+                return User.get(id, false, Collections.emptyMap());
             }
 
         } catch (Exception e) {
@@ -145,7 +146,7 @@ public final class RecipientProviderUtilities {
                 Field authenticationName = Cause.UserCause.class.getDeclaredField("authenticationName");
                 authenticationName.setAccessible(true);
                 String name = (String) authenticationName.get(userCause);
-                return User.get(name, false, null);
+                return User.get(name, false, Collections.emptyMap());
             }
         } catch (Exception e) {
             LOGGER.info(e.getMessage());
@@ -197,7 +198,8 @@ public final class RecipientProviderUtilities {
                                 }
                             }
                         } catch (UsernameNotFoundException x) {
-                            if (SEND_TO_UNKNOWN_USERS) {
+                            
+                            if (SEND_TO_UNKNOWN_USERS || ExtendedEmailPublisher.descriptor().isAllowUnregisteredEnabled() ) {
                                 listener.getLogger().printf("Warning: %s is not a recognized user, but sending mail anyway%n", userAddress);
                             } else {
                                 listener.getLogger().printf("Not sending mail to unregistered user %s because your SCM"

@@ -1,1 +1,4 @@
-buildPlugin(failFast: false)
+buildPlugin(
+    failFast: false,
+    configurations: buildPlugin.recommendedConfigurations()
+)

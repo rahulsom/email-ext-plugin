@@ -41,8 +41,8 @@ public class CssInlinerTest {
                 + "  </body>"
                 + "</html>";
         String output = process(input);
-        assertEquals("<html><head></head><body><h1>Compte rendu d&apos;installation sur WMS11DEV</h1>"
-                + "<p> Veuillez trouver la liste des patchs installés sur l&apos;environnement WMS11DEV "
+        assertEquals("<html><head></head><body><h1>Compte rendu d'installation sur WMS11DEV</h1>"
+                + "<p> Veuillez trouver la liste des patchs installés sur l'environnement WMS11DEV "
                 + ": </p></body></html>", output);
   }
 
@@ -117,11 +117,11 @@ public class CssInlinerTest {
   public void testImageInliningOn() {
         String input = "<html>"
                 + "  <body>"
-                + "    <img src='https://updates.jenkins-ci.org/icons/blank.gif' data-inline='true'/>"
+                + "    <img src='https://updates.jenkins-ci.org/icons/blank.gif' data-inline='true' />"
                 + "  </body>"
                 + "</html>";
 
-    String output = process(input);
+        String output = process(input);
         String unprocessedExpect = "<html><head></head><body><img src=\"data:image/gif;base64,"
                 + "R0lGODlhFAAWAKEAAP///8z//wAAAAAAACH+TlRoaXMgYXJ0IGlzIGluIHRoZSBwdWJsaWMgZG9t\n"
                 + "YWluLiBLZXZpbiBIdWdoZXMsIGtldmluaEBlaXQuY29tLCBTZXB0ZW1iZXIgMTk5NQAh+QQBAAAB\n"
